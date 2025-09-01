@@ -770,7 +770,7 @@ def main():
     if 'pdf_config' not in st.session_state:
         st.session_state.pdf_config = {
             'drive_folder_id': "1aUjRMqWjVDDAsQw0TugwgmwYjxP6W7DT",
-            'llama_api_key': "llx-ZBUTlOe0JLY3ny0FSs5mSJTMgOZU7RV3x3TGyQPNQQ0XPhyO",
+            'llama_api_key': "llx-NEheM5qr1qgFuAwXCqLFbrRkkSyEeW7gGfIyFANVmuK5qvFT",
             'llama_agent': "Hyperpure Agent",
             'spreadsheet_id': "1B1C2ILnIMXpEYbQzaSkhRzEP2gmgE2YLRNqoX98GwcU",
             'sheet_range': "hyperpuregrn",
@@ -998,3 +998,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
