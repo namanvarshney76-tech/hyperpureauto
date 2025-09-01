@@ -777,6 +777,19 @@ def main():
             'days_back': 1
         }
     
+    # Initialize workflow state
+    if 'workflow_state' not in st.session_state:
+        st.session_state.workflow_state = {
+            'running': False,
+            'type': None,
+            'progress': 0,
+            'status': '',
+            'logs': [],
+            'result': None,
+            'thread': None,
+            'queue': queue.Queue()
+        }
+    
     # Configuration section in sidebar
     st.sidebar.header("Configuration")
     
@@ -835,23 +848,22 @@ def main():
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("Gmail Workflow Only", use_container_width=True):
-            st.session_state.workflow = "gmail"
+        if st.button("Gmail Workflow Only", use_container_width=True, 
+                    disabled=st.session_state.workflow_state['running']):
+            st.session_state.workflow_state['type'] = "gmail"
     
     with col2:
-        if st.button("PDF Workflow Only", use_container_width=True):
-            st.session_state.workflow = "pdf"
+        if st.button("PDF Workflow Only", use_container_width=True, 
+                    disabled=st.session_state.workflow_state['running']):
+            st.session_state.workflow_state['type'] = "pdf"
     
     with col3:
-        if st.button("Combined Workflow", use_container_width=True):
-            st.session_state.workflow = "combined"
-    
-    # Initialize session state for workflow
-    if 'workflow' not in st.session_state:
-        st.session_state.workflow = None
+        if st.button("Combined Workflow", use_container_width=True, 
+                    disabled=st.session_state.workflow_state['running']):
+            st.session_state.workflow_state['type'] = "combined"
     
     # Show current configuration preview
-    if not st.session_state.workflow:
+    if not st.session_state.workflow_state['type'] and not st.session_state.workflow_state['running']:
         st.header("Current Configuration")
         
         col1, col2 = st.columns(2)
@@ -868,10 +880,9 @@ def main():
             st.json(display_pdf_config)
         
         st.info("Configure your settings in the sidebar, then select a workflow above to begin automation")
-        return
     
     # Run workflows using session state configurations
-    if st.session_state.workflow:
+    if st.session_state.workflow_state['type'] and not st.session_state.workflow_state['running']:
         # Create automation instance
         automation = HyperpureAutomation()
         
@@ -886,116 +897,76 @@ def main():
             # Workflow execution section
             st.header("Workflow Execution")
             
-            # Progress tracking
-            main_progress = st.progress(0)
-            main_status = st.empty()
+            # Start the background thread
+            thread = threading.Thread(
+                target=run_workflow_in_background,
+                args=(automation, st.session_state.workflow_state['type'], 
+                      st.session_state.gmail_config, st.session_state.pdf_config, 
+                      st.session_state.workflow_state['queue'])
+            )
+            thread.start()
             
-            # Log container
-            st.subheader("Real-time Logs")
-            log_container = st.empty()
-            
-            # Initialize session state for workflow if needed
-            workflow_key = f"{st.session_state.workflow}_workflow"
-            if workflow_key not in st.session_state:
-                st.session_state[workflow_key] = {'running': False, 'result': None, 'logs': [], 'progress': 0, 'status': ''}
-            
-            # Start the background thread if not already running
-            if not st.session_state[workflow_key]['running']:
-                progress_queue = queue.Queue()
-                st.session_state.progress_queue = progress_queue
-                
-                thread = threading.Thread(
-                    target=run_workflow_in_background,
-                    args=(automation, st.session_state.workflow, st.session_state.gmail_config, st.session_state.pdf_config, progress_queue)
-                )
-                thread.start()
-                st.session_state.workflow_thread = thread
-                st.session_state[workflow_key]['running'] = True
-                st.session_state[workflow_key]['logs'] = []
-                st.session_state[workflow_key]['progress'] = 0
-                st.session_state[workflow_key]['status'] = "Initializing..."
-            
-            # Enable auto-refresh every 1 second while running
-            if st.session_state[workflow_key]['running']:
-                st_autorefresh(interval=1000, key=f"{workflow_key}_refresh")
-            
-            # Poll the queue for updates
-            while not st.session_state.progress_queue.empty():
-                msg = st.session_state.progress_queue.get()
-                if msg['type'] == 'progress':
-                    st.session_state[workflow_key]['progress'] = msg['value']
-                elif msg['type'] == 'status':
-                    st.session_state[workflow_key]['status'] = msg['text']
-                elif msg['type'] == 'info':
-                    st.session_state[workflow_key]['logs'].append(f"INFO: {msg['text']}")
-                elif msg['type'] == 'warning':
-                    st.session_state[workflow_key]['logs'].append(f"WARNING: {msg['text']}")
-                elif msg['type'] == 'error':
-                    st.session_state[workflow_key]['logs'].append(f"ERROR: {msg['text']}")
-                elif msg['type'] == 'success':
-                    st.session_state[workflow_key]['logs'].append(f"SUCCESS: {msg['text']}")
-                elif msg['type'] == 'done':
-                    st.session_state[workflow_key]['result'] = msg['result']
-                    st.session_state[workflow_key]['running'] = False
-            
-            # Update UI from session state
-            main_progress.progress(st.session_state[workflow_key]['progress'])
-            main_status.text(st.session_state[workflow_key]['status'])
-            log_container.text_area("Logs", "\n".join(st.session_state[workflow_key]['logs'][-50:]), height=200)
-            
-            # Check if done
-            if not st.session_state[workflow_key]['running'] and st.session_state.workflow_thread.is_alive():
-                st.session_state.workflow_thread.join()  # Clean up thread
-            
-            if st.session_state[workflow_key]['result']:
-                result = st.session_state[workflow_key]['result']
-                if result['success']:
-                    st.success(f"{st.session_state.workflow.capitalize()} workflow completed! Processed {result['processed']} items")
-                    if st.session_state.workflow == "combined":
-                        st.balloons()
-                else:
-                    st.error(f"{st.session_state.workflow.capitalize()} workflow failed")
-        
-        # Reset workflow with confirmation
-        st.markdown("---")
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Reset Workflow", use_container_width=True):
-                st.session_state.workflow = None
-                if 'workflow_thread' in st.session_state:
-                    # Note: Can't safely stop thread, but it will finish naturally
-                    del st.session_state.workflow_thread
-                if 'progress_queue' in st.session_state:
-                    del st.session_state.progress_queue
-                if workflow_key in st.session_state:
-                    del st.session_state[workflow_key]
-                st.rerun()
-        with col2:
-            if st.button("Reset All Settings", use_container_width=True, type="secondary"):
-                # Reset all configurations
-                for key in ['gmail_config', 'pdf_config', 'workflow', 'workflow_thread', 'progress_queue', workflow_key]:
-                    if key in st.session_state:
-                        del st.session_state[key]
-                st.rerun()
+            # Update workflow state
+            st.session_state.workflow_state['running'] = True
+            st.session_state.workflow_state['thread'] = thread
+            st.session_state.workflow_state['logs'] = []
+            st.session_state.workflow_state['progress'] = 0
+            st.session_state.workflow_state['status'] = "Initializing..."
     
-    else:
-        # Show configuration preview when no workflow is selected
-        st.header("📋 Current Configuration")
+    # Handle running workflows
+    if st.session_state.workflow_state['running']:
+        # Enable auto-refresh every 1 second while running
+        st_autorefresh(interval=1000, key="workflow_refresh")
         
-        col1, col2 = st.columns(2)
+        # Poll the queue for updates
+        while not st.session_state.workflow_state['queue'].empty():
+            msg = st.session_state.workflow_state['queue'].get()
+            if msg['type'] == 'progress':
+                st.session_state.workflow_state['progress'] = msg['value']
+            elif msg['type'] == 'status':
+                st.session_state.workflow_state['status'] = msg['text']
+            elif msg['type'] == 'info':
+                st.session_state.workflow_state['logs'].append(f"INFO: {msg['text']}")
+            elif msg['type'] == 'warning':
+                st.session_state.workflow_state['logs'].append(f"WARNING: {msg['text']}")
+            elif msg['type'] == 'error':
+                st.session_state.workflow_state['logs'].append(f"ERROR: {msg['text']}")
+            elif msg['type'] == 'success':
+                st.session_state.workflow_state['logs'].append(f"SUCCESS: {msg['text']}")
+            elif msg['type'] == 'done':
+                st.session_state.workflow_state['result'] = msg['result']
+                st.session_state.workflow_state['running'] = False
         
-        with col1:
-            st.subheader("Gmail Configuration")
-            st.json(st.session_state.gmail_config)
+        # Progress tracking
+        main_progress = st.progress(st.session_state.workflow_state['progress'])
+        main_status = st.text(st.session_state.workflow_state['status'])
         
-        with col2:
-            st.subheader("PDF Configuration")
-            display_pdf_config = st.session_state.pdf_config.copy()
-            display_pdf_config['llama_api_key'] = "*" * len(display_pdf_config['llama_api_key'])
-            st.json(display_pdf_config)
+        # Log container
+        st.subheader("Real-time Logs")
+        log_container = st.empty()
+        log_container.text_area("Logs", "\n".join(st.session_state.workflow_state['logs'][-50:]), height=200)
         
-        st.info("Select a workflow above to begin automation")
+        # Check if workflow is done
+        if not st.session_state.workflow_state['running']:
+            # Clean up thread
+            thread = st.session_state.workflow_state['thread']
+            if thread and thread.is_alive():
+                thread.join()
+            
+            # Show result
+            result = st.session_state.workflow_state['result']
+            if result and result['success']:
+                st.success(f"{st.session_state.workflow_state['type'].capitalize()} workflow completed! Processed {result['processed']} items")
+                if st.session_state.workflow_state['type'] == "combined":
+                    st.balloons()
+            elif result:
+                st.error(f"{st.session_state.workflow_state['type'].capitalize()} workflow failed")
+            
+            # Reset button
+            if st.button("Reset Workflow"):
+                st.session_state.workflow_state['type'] = None
+                st.session_state.workflow_state['result'] = None
+                st.rerun()
 
 if __name__ == "__main__":
     main()
-
