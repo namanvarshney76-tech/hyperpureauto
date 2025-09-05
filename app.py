@@ -567,7 +567,7 @@ class HyperpureAutomation:
             item["po_number"] = extracted_data.get("po_number") or extracted_data.get("purchase_order_number") or ""
             item["vendor_invoice_number"] = extracted_data.get("vendor_invoice_number") or extracted_data.get("invoice_number") or extracted_data.get("supplier_bill_number") or ""
             item["supplier"] = extracted_data.get("supplier") or extracted_data.get("vendor") or ""
-            item["shipping_address"] = extracted_data.get("shipping_address") or extracted_data.get("receiver_address") or ""
+            item["shipping_address"] = extracted_data.get("shipping_address") or extracted_data.get("receiver_address") or extracted_data.get("Shipping Address") or ""
             item["grn_date"] = extracted_data.get("grn_date") or extracted_data.get("delivered_on") or ""
             item["source_file"] = file_info['name']
             item["processed_date"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -956,4 +956,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
