@@ -198,7 +198,6 @@ class HyperpureAutomation:
             st.error(f"Authentication failed: {str(e)}")
             return False
     
-    # Gmail to Drive logic adapted from hyperpuremail.py
     def search_emails(self, sender: str = "", search_term: str = "", 
                       days_back: int = 7, max_results: int = 50) -> List[Dict]:
         try:
@@ -364,7 +363,6 @@ class HyperpureAutomation:
             self.log(f"Gmail workflow failed: {str(e)}", "ERROR")
             return {'success': False, 'processed': 0}
     
-    # PDF to Sheet logic adapted from hyperpuresheet.py
     def list_drive_pdfs(self, folder_id: str, days_back: int = 1) -> List[Dict]:
         try:
             start_datetime = datetime.utcnow() - timedelta(days=days_back - 1)
@@ -595,7 +593,7 @@ def main():
     st.sidebar.subheader("🔐 Authentication")
     auth_status = st.sidebar.empty()
     
-    if not automation.gmail_service or not automation.drive_service:
+    if not automation.gmail_service or not automation.drive_service or not automation.sheets_service:
         if st.sidebar.button("🚀 Authenticate with Google", type="primary"):
             progress_bar = st.sidebar.progress(0)
             status_text = st.sidebar.empty()
@@ -633,18 +631,18 @@ def main():
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("Configuration")
-                st.text_input("Sender Email", value=CONFIG['gmail']['sender'], disabled=True)
-                st.text_input("Search Keywords", value=CONFIG['gmail']['search_term'], disabled=True)
-                st.text_input("Google Drive Folder ID", value=CONFIG['gmail']['gdrive_folder_id'], disabled=True)
-                st.text_input("Attachment Filter", value=CONFIG['gmail']['attachment_filter'], disabled=True)
+                st.text_input("Sender Email", value=CONFIG['gmail']['sender'], disabled=True, key="gmail_sender")
+                st.text_input("Search Keywords", value=CONFIG['gmail']['search_term'], disabled=True, key="gmail_search")
+                st.text_input("Google Drive Folder ID", value=CONFIG['gmail']['gdrive_folder_id'], disabled=True, key="gmail_drive_folder")
+                st.text_input("Attachment Filter", value=CONFIG['gmail']['attachment_filter'], disabled=True, key="gmail_attachment_filter")
                 st.subheader("Parameters")
-                gmail_days_back = st.number_input("Days to search back", min_value=1, max_value=365, value=7)
-                gmail_max_results = st.number_input("Maximum emails to process", min_value=1, max_value=500, value=50)
+                gmail_days_back = st.number_input("Days to search back", min_value=1, max_value=365, value=7, key="gmail_days_back")
+                gmail_max_results = st.number_input("Maximum emails to process", min_value=1, max_value=500, value=50, key="gmail_max_results")
             with col2:
                 st.subheader("Description")
                 st.info("Downloads 'attachment.pdf' from specified emails to Drive")
             
-            if st.button("🚀 Start Mail to Drive", type="primary", disabled=st.session_state.workflow_running):
+            if st.button("🚀 Start Mail to Drive", type="primary", disabled=st.session_state.workflow_running, key="start_mail_to_drive"):
                 st.session_state.workflow_running = True
                 try:
                     config = {
@@ -683,20 +681,20 @@ def main():
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("Configuration")
-                st.text_input("LlamaParse API Key", value="***HIDDEN***", disabled=True)
-                st.text_input("LlamaParse Agent Name", value=CONFIG['pdf']['llama_agent'], disabled=True)
-                st.text_input("PDF Source Folder ID", value=CONFIG['pdf']['drive_folder_id'], disabled=True)
-                st.text_input("Google Sheets Spreadsheet ID", value=CONFIG['pdf']['spreadsheet_id'], disabled=True)
-                st.text_input("Sheet Range", value=CONFIG['pdf']['sheet_range'], disabled=True)
+                st.text_input("LlamaParse API Key", value="***HIDDEN***", disabled=True, key="pdf_llama_api")
+                st.text_input("LlamaParse Agent Name", value=CONFIG['pdf']['llama_agent'], disabled=True, key="pdf_llama_agent")
+                st.text_input("PDF Source Folder ID", value=CONFIG['pdf']['drive_folder_id'], disabled=True, key="pdf_drive_folder")
+                st.text_input("Google Sheets Spreadsheet ID", value=CONFIG['pdf']['spreadsheet_id'], disabled=True, key="pdf_spreadsheet_id")
+                st.text_input("Sheet Range", value=CONFIG['pdf']['sheet_range'], disabled=True, key="pdf_sheet_range")
                 st.subheader("Parameters")
-                pdf_days_back = st.number_input("Process PDFs from last N days", min_value=1, max_value=365, value=7)
-                pdf_max_files = st.number_input("Maximum PDFs to process", min_value=1, max_value=500, value=50)
-                pdf_skip_existing = st.checkbox("Skip already processed files", value=True)
+                pdf_days_back = st.number_input("Process PDFs from last N days", min_value=1, max_value=365, value=7, key="pdf_days_back")
+                pdf_max_files = st.number_input("Maximum PDFs to process", min_value=1, max_value=500, value=50, key="pdf_max_files")
+                pdf_skip_existing = st.checkbox("Skip already processed files", value=True, key="pdf_skip_existing")
             with col2:
                 st.subheader("Description")
                 st.info("Extracts data from PDFs and appends to Sheets")
             
-            if st.button("🚀 Start Drive to Sheet", type="primary", disabled=st.session_state.workflow_running):
+            if st.button("🚀 Start Drive to Sheet", type="primary", disabled=st.session_state.workflow_running, key="start_drive_to_sheet"):
                 st.session_state.workflow_running = True
                 try:
                     config = {
@@ -737,23 +735,23 @@ def main():
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("Configuration")
-                st.text_input("Gmail Sender", value=CONFIG['gmail']['sender'], disabled=True)
-                st.text_input("Gmail Search Keywords", value=CONFIG['gmail']['search_term'], disabled=True)
-                st.text_input("Gmail Drive Folder ID", value=CONFIG['gmail']['gdrive_folder_id'], disabled=True)
-                st.text_input("PDF LlamaParse API Key", value="***HIDDEN***", disabled=True)
-                st.text_input("PDF LlamaParse Agent Name", value=CONFIG['pdf']['llama_agent'], disabled=True)
-                st.text_input("PDF Source Folder ID", value=CONFIG['pdf']['drive_folder_id'], disabled=True)
-                st.text_input("Google Sheets Spreadsheet ID", value=CONFIG['pdf']['spreadsheet_id'], disabled=True)
-                st.text_input("Sheet Range", value=CONFIG['pdf']['sheet_range'], disabled=True)
+                st.text_input("Gmail Sender (Combined)", value=CONFIG['gmail']['sender'], disabled=True, key="combined_gmail_sender")
+                st.text_input("Gmail Search Keywords (Combined)", value=CONFIG['gmail']['search_term'], disabled=True, key="combined_gmail_search")
+                st.text_input("Gmail Drive Folder ID (Combined)", value=CONFIG['gmail']['gdrive_folder_id'], disabled=True, key="combined_gmail_drive_folder")
+                st.text_input("PDF LlamaParse API Key (Combined)", value="***HIDDEN***", disabled=True, key="combined_pdf_llama_api")
+                st.text_input("PDF LlamaParse Agent Name (Combined)", value=CONFIG['pdf']['llama_agent'], disabled=True, key="combined_pdf_llama_agent")
+                st.text_input("PDF Source Folder ID (Combined)", value=CONFIG['pdf']['drive_folder_id'], disabled=True, key="combined_pdf_drive_folder")
+                st.text_input("Google Sheets Spreadsheet ID (Combined)", value=CONFIG['pdf']['spreadsheet_id'], disabled=True, key="combined_pdf_spreadsheet_id")
+                st.text_input("Sheet Range (Combined)", value=CONFIG['pdf']['sheet_range'], disabled=True, key="combined_pdf_sheet_range")
                 st.subheader("Parameters")
-                combined_days_back = st.number_input("Days back for both", min_value=1, max_value=365, value=7)
-                combined_max_emails = st.number_input("Max emails for Gmail", min_value=1, max_value=500, value=50)
-                combined_max_files = st.number_input("Max PDFs for processing", min_value=1, max_value=500, value=50)
+                combined_days_back = st.number_input("Days back for both", min_value=1, max_value=365, value=7, key="combined_days_back")
+                combined_max_emails = st.number_input("Max emails for Gmail", min_value=1, max_value=500, value=50, key="combined_max_emails")
+                combined_max_files = st.number_input("Max PDFs for processing", min_value=1, max_value=500, value=50, key="combined_max_files")
             with col2:
                 st.subheader("Description")
                 st.info("Runs Mail to Drive, then processes only new PDFs to Sheet")
             
-            if st.button("🚀 Start Combined Workflow", type="primary", disabled=st.session_state.workflow_running):
+            if st.button("🚀 Start Combined Workflow", type="primary", disabled=st.session_state.workflow_running, key="start_combined_workflow"):
                 st.session_state.workflow_running = True
                 try:
                     gmail_config = {
@@ -785,6 +783,7 @@ def main():
                         gmail_result = automation.process_gmail_workflow(gmail_config, update_progress, update_status)
                         if not gmail_result['success']:
                             st.error("❌ Mail to Drive failed.")
+                            st.session_state.workflow_running = False
                             return
                         update_status("Running Drive to Sheet on new files...")
                         pdf_result = automation.process_pdf_workflow(pdf_config, update_progress, update_status, skip_existing=True)
@@ -800,15 +799,15 @@ def main():
         st.header("📋 System Logs & Status")
         col1, col2, col3 = st.columns(3)
         with col1:
-            if st.button("🔄 Refresh Logs"):
+            if st.button("🔄 Refresh Logs", key="refresh_logs"):
                 st.rerun()
         with col2:
-            if st.button("🗑️ Clear Logs"):
+            if st.button("🗑️ Clear Logs", key="clear_logs"):
                 automation.clear_logs()
                 st.success("Logs cleared!")
                 st.rerun()
         with col3:
-            if st.checkbox("Auto-refresh (5s)", value=False):
+            if st.checkbox("Auto-refresh (5s)", value=False, key="auto_refresh"):
                 time.sleep(5)
                 st.rerun()
         logs = automation.get_logs()
