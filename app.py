@@ -390,11 +390,40 @@ class HyperpureAutomation:
     
     def download_from_drive(self, file_id: str, file_name: str) -> bytes:
         try:
+            self.log(f"Downloading: {file_name}", "INFO")
             request = self.drive_service.files().get_media(fileId=file_id)
-            return request.execute()
+            file_data = request.execute()
+            self.log(f"Downloaded: {file_name}", "SUCCESS")
+            return file_data
         except Exception as e:
             self.log(f"Failed to download {file_name}: {str(e)}", "ERROR")
             return b""
+    
+    def get_sheet_data(self, spreadsheet_id: str, sheet_name: str) -> List[List[str]]:
+        """Get all data from the sheet"""
+        try:
+            result = self.sheets_service.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=sheet_name,
+                majorDimension="ROWS"
+            ).execute()
+            return result.get('values', [])
+        except Exception as e:
+            self.log(f"Failed to get sheet data: {str(e)}", "ERROR")
+            return []
+    
+    def get_sheet_id(self, spreadsheet_id: str, sheet_name: str) -> int:
+        """Get the numeric sheet ID for the given sheet name"""
+        try:
+            metadata = self.sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+            for sheet in metadata.get('sheets', []):
+                if sheet['properties']['title'] == sheet_name:
+                    return sheet['properties']['sheetId']
+            self.log(f"Sheet '{sheet_name}' not found", "ERROR")
+            return 0
+        except Exception as e:
+            self.log(f"Failed to get sheet metadata: {str(e)}", "ERROR")
+            return 0
     
     def get_existing_drive_ids(self, spreadsheet_id: str, sheet_range: str) -> set:
         try:
@@ -453,20 +482,75 @@ class HyperpureAutomation:
             self.log(f"Failed to update sheet headers: {str(e)}", "ERROR")
             return False
     
-    def _append_to_google_sheet(self, spreadsheet_id: str, range_name: str, values: List[List[Any]]):
+    def _append_to_google_sheet(self, spreadsheet_id: str, range_name: str, values: List[List[Any]], max_retries: int = 3):
+        """Append data to Google Sheet with retry mechanism"""
+        for attempt in range(1, max_retries + 1):
+            try:
+                body = {'values': values}
+                result = self.sheets_service.spreadsheets().values().append(
+                    spreadsheetId=spreadsheet_id, 
+                    range=range_name,
+                    valueInputOption='USER_ENTERED', 
+                    body=body
+                ).execute()
+                updated_cells = result.get('updates', {}).get('updatedCells', 0)
+                self.log(f"Appended {updated_cells} cells to Google Sheet", "SUCCESS")
+                return True
+            except Exception as e:
+                if attempt < max_retries:
+                    self.log(f"Append attempt {attempt} failed: {str(e)}", "WARNING")
+                    time.sleep(2)
+                else:
+                    self.log(f"Failed to append to Google Sheet after {max_retries} attempts: {str(e)}", "ERROR")
+                    return False
+        return False
+    
+    def replace_rows_for_file(self, spreadsheet_id: str, sheet_name: str, file_id: str, 
+                             headers: List[str], new_rows: List[List[Any]], sheet_id: int) -> bool:
+        """Delete existing rows for the file if any, and append new rows"""
         try:
-            body = {'values': values}
-            result = self.sheets_service.spreadsheets().values().append(
-                spreadsheetId=spreadsheet_id, 
-                range=range_name,
-                valueInputOption='USER_ENTERED', 
-                body=body
-            ).execute()
-            updated_cells = result.get('updates', {}).get('updatedCells', 0)
-            self.log(f"Appended {updated_cells} cells to Google Sheet", "SUCCESS")
-            return True
+            values = self.get_sheet_data(spreadsheet_id, sheet_name)
+            if not values:
+                return self._append_to_google_sheet(spreadsheet_id, sheet_name, new_rows)
+            
+            current_headers = values[0]
+            data_rows = values[1:]
+            
+            try:
+                file_id_col = current_headers.index('drive_file_id')
+            except ValueError:
+                self.log("No 'drive_file_id' column found, appending new rows", "INFO")
+                return self._append_to_google_sheet(spreadsheet_id, sheet_name, new_rows)
+            
+            rows_to_delete = []
+            for idx, row in enumerate(data_rows, 2):
+                if len(row) > file_id_col and row[file_id_col] == file_id:
+                    rows_to_delete.append(idx)
+            
+            if rows_to_delete:
+                rows_to_delete.sort(reverse=True)
+                requests = []
+                for row_idx in rows_to_delete:
+                    requests.append({
+                        'deleteDimension': {
+                            'range': {
+                                'sheetId': sheet_id,
+                                'dimension': 'ROWS',
+                                'startIndex': row_idx - 1,
+                                'endIndex': row_idx
+                            }
+                        }
+                    })
+                body = {'requests': requests}
+                self.sheets_service.spreadsheets().batchUpdate(
+                    spreadsheetId=spreadsheet_id,
+                    body=body
+                ).execute()
+                self.log(f"Deleted {len(rows_to_delete)} existing rows for file {file_id}", "INFO")
+            
+            return self._append_to_google_sheet(spreadsheet_id, sheet_name, new_rows)
         except Exception as e:
-            self.log(f"Failed to append to Google Sheet: {str(e)}", "ERROR")
+            self.log(f"Failed to replace rows: {str(e)}", "ERROR")
             return False
     
     def process_extracted_data(self, extracted_data: Dict, file_info: Dict) -> List[Dict]:
@@ -495,7 +579,9 @@ class HyperpureAutomation:
     def safe_extract(self, agent, file_path: str, retries: int = 3):
         for attempt in range(1, retries + 1):
             try:
+                self.log(f"Extracting data (attempt {attempt}/{retries})...", "INFO")
                 result = agent.extract(file_path)
+                self.log("Extraction successful", "SUCCESS")
                 return result
             except Exception as e:
                 self.log(f"Extraction attempt {attempt} failed: {str(e)}", "WARNING")
@@ -506,7 +592,7 @@ class HyperpureAutomation:
     def process_pdf_workflow(self, config: dict, progress_callback=None, status_callback=None, skip_existing: bool = False):
         if not LLAMA_AVAILABLE:
             self.log("LlamaParse not available", "ERROR")
-            return {'success': False, 'processed': 0, 'rows_added': 0}
+            return {'success': False, 'processed': 0, 'rows_added': 0, 'failed': 0}
         try:
             if status_callback:
                 status_callback("Starting PDF to Sheet workflow...")
@@ -516,7 +602,10 @@ class HyperpureAutomation:
             agent = extractor.get_agent(name=config['llama_agent'])
             if agent is None:
                 self.log(f"Could not find agent '{config['llama_agent']}'", "ERROR")
-                return {'success': False, 'processed': 0, 'rows_added': 0}
+                return {'success': False, 'processed': 0, 'rows_added': 0, 'failed': 0}
+            self.log("LlamaParse agent found", "SUCCESS")
+            sheet_name = config['sheet_range'].split('!')[0]
+            sheet_id = self.get_sheet_id(config['spreadsheet_id'], sheet_name)
             existing_ids = set()
             if skip_existing:
                 existing_ids = self.get_existing_drive_ids(config['spreadsheet_id'], config['sheet_range'])
@@ -530,18 +619,23 @@ class HyperpureAutomation:
                 progress_callback(25)
             if not pdf_files:
                 self.log("No PDF files found", "WARNING")
-                return {'success': True, 'processed': 0, 'rows_added': 0}
+                if status_callback:
+                    status_callback("No PDF files found in the specified folder")
+                return {'success': True, 'processed': 0, 'rows_added': 0, 'failed': 0}
             if status_callback:
                 status_callback(f"Found {len(pdf_files)} PDF files. Processing...")
             existing_headers = self._get_sheet_headers(config['spreadsheet_id'], config['sheet_range'])
+            headers_set = not bool(existing_headers)
             processed_count = 0
             rows_added = 0
+            failed_count = 0
             for i, file in enumerate(pdf_files):
                 if status_callback:
                     status_callback(f"Processing PDF {i+1}/{len(pdf_files)}: {file['name']}")
                 self.log(f"Processing PDF {i+1}/{len(pdf_files)}: {file['name']}", "INFO")
                 pdf_data = self.download_from_drive(file['id'], file['name'])
                 if not pdf_data:
+                    failed_count += 1
                     continue
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
                     temp_file.write(pdf_data)
@@ -549,32 +643,54 @@ class HyperpureAutomation:
                 result = self.safe_extract(agent, temp_path)
                 os.unlink(temp_path)
                 if not result:
+                    failed_count += 1
                     continue
                 extracted_data = result.data
                 rows = self.process_extracted_data(extracted_data, file)
                 if not rows:
+                    self.log(f"No rows extracted from: {file['name']}", "WARNING")
+                    failed_count += 1
                     continue
-                all_keys = list(set().union(*(r.keys() for r in rows)))
+                processed_count += 1
+                self.log(f"Successfully processed: {file['name']}", "SUCCESS")
+                self.log(f"Extracted {len(rows)} rows from this PDF", "INFO")
+                if not existing_headers and not headers_set:
+                    all_keys = list(set().union(*(row.keys() for row in rows)))
+                    existing_headers = all_keys
+                    self._update_sheet_headers(config['spreadsheet_id'], config['sheet_range'], existing_headers)
+                    headers_set = True
+                all_keys = list(set().union(*(row.keys() for row in rows)))
                 new_headers = list(set(existing_headers + all_keys))
                 if len(new_headers) > len(existing_headers):
                     self._update_sheet_headers(config['spreadsheet_id'], config['sheet_range'], new_headers)
                     existing_headers = new_headers
                 values = [[row.get(h, "") for h in existing_headers] for row in rows]
-                if self._append_to_google_sheet(config['spreadsheet_id'], config['sheet_range'], values):
-                    processed_count += 1
+                success = self.replace_rows_for_file(
+                    spreadsheet_id=config['spreadsheet_id'],
+                    sheet_name=sheet_name,
+                    file_id=file['id'],
+                    headers=existing_headers,
+                    new_rows=values,
+                    sheet_id=sheet_id
+                )
+                if success:
                     rows_added += len(rows)
+                    self.log(f"Successfully saved {len(rows)} rows for this PDF", "SUCCESS")
+                else:
+                    self.log(f"Failed to save rows for {file['name']}", "ERROR")
+                    failed_count += 1
                 if progress_callback:
                     progress = 25 + (i + 1) / len(pdf_files) * 70
                     progress_callback(int(progress))
             if progress_callback:
                 progress_callback(100)
             if status_callback:
-                status_callback(f"PDF workflow completed! Processed {processed_count} files, added {rows_added} rows")
-            self.log(f"PDF workflow completed. Processed {processed_count} files, added {rows_added} rows", "SUCCESS")
-            return {'success': True, 'processed': processed_count, 'rows_added': rows_added}
+                status_callback(f"PDF workflow completed! Processed {processed_count} files, added {rows_added} rows, {failed_count} failed")
+            self.log(f"PDF workflow completed. Processed {processed_count} files, added {rows_added} rows, {failed_count} failed", "SUCCESS")
+            return {'success': True, 'processed': processed_count, 'rows_added': rows_added, 'failed': failed_count}
         except Exception as e:
             self.log(f"PDF workflow failed: {str(e)}", "ERROR")
-            return {'success': False, 'processed': 0, 'rows_added': 0}
+            return {'success': False, 'processed': 0, 'rows_added': 0, 'failed': 0}
 
 def main():
     st.title("🤖 Hyperpure Automation Workflows")
@@ -840,4 +956,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
