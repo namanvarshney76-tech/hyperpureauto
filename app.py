@@ -94,20 +94,18 @@ class HyperpureAutomation:
         st.session_state.logs = []
     
     def authenticate_from_secrets(self, progress_bar, status_text):
-        """Authenticate using Streamlit secrets with web-based OAuth flow"""
         try:
             self.log("Starting authentication process...", "INFO")
             status_text.text("Authenticating with Google APIs...")
             progress_bar.progress(10)
             
-            # Check for existing token in session state
+            # Check for existing token
             if 'oauth_token' in st.session_state:
                 try:
                     combined_scopes = list(set(self.gmail_scopes + self.drive_scopes + self.sheets_scopes))
                     creds = Credentials.from_authorized_user_info(st.session_state.oauth_token, combined_scopes)
                     if creds and creds.valid:
                         progress_bar.progress(50)
-                        # Build services
                         self.gmail_service = build('gmail', 'v1', credentials=creds)
                         self.drive_service = build('drive', 'v3', credentials=creds)
                         self.sheets_service = build('sheets', 'v4', credentials=creds)
@@ -118,7 +116,7 @@ class HyperpureAutomation:
                     elif creds and creds.expired and creds.refresh_token:
                         creds.refresh(Request())
                         st.session_state.oauth_token = json.loads(creds.to_json())
-                        # Build services
+                        progress_bar.progress(50)
                         self.gmail_service = build('gmail', 'v1', credentials=creds)
                         self.drive_service = build('drive', 'v3', credentials=creds)
                         self.sheets_service = build('sheets', 'v4', credentials=creds)
@@ -126,6 +124,8 @@ class HyperpureAutomation:
                         self.log("Authentication successful after token refresh!", "SUCCESS")
                         status_text.text("Authentication successful!")
                         return True
+                    else:
+                        self.log("Cached token invalid or expired without refresh token", "WARNING")
                 except Exception as e:
                     self.log(f"Cached token invalid: {str(e)}", "WARNING")
             
@@ -133,39 +133,31 @@ class HyperpureAutomation:
             if "google" in st.secrets and "credentials_json" in st.secrets["google"]:
                 creds_data = json.loads(st.secrets["google"]["credentials_json"])
                 combined_scopes = list(set(self.gmail_scopes + self.drive_scopes + self.sheets_scopes))
-                
-                # Configure for web application
                 flow = Flow.from_client_config(
                     client_config=creds_data,
                     scopes=combined_scopes,
-                    redirect_uri=st.secrets.get("redirect_uri", "https://hyperpuregrn.streamlit.app/")  # Adjust redirect URI as needed
+                    redirect_uri=st.secrets.get("redirect_uri", "https://hyperpure-auto.streamlit.app/")
                 )
-                
-                # Generate authorization URL
                 auth_url, _ = flow.authorization_url(prompt='consent')
-                
-                # Check for callback code
                 query_params = st.query_params
                 if "code" in query_params:
                     try:
-                        code = query_params["code"][0]  # Handle list if needed
+                        code = query_params["code"]
+                        if isinstance(code, list):
+                            code = code[0]
+                        if not code:
+                            raise ValueError("Authorization code is empty")
+                        self.log(f"Received auth code: {code[:10]}...", "DEBUG")  # Log partial code for security
                         flow.fetch_token(code=code)
                         creds = flow.credentials
-                        
-                        # Save credentials in session state
                         st.session_state.oauth_token = json.loads(creds.to_json())
-                        
                         progress_bar.progress(50)
-                        # Build services
                         self.gmail_service = build('gmail', 'v1', credentials=creds)
                         self.drive_service = build('drive', 'v3', credentials=creds)
                         self.sheets_service = build('sheets', 'v4', credentials=creds)
-                        
                         progress_bar.progress(100)
                         self.log("OAuth authentication successful!", "SUCCESS")
                         status_text.text("Authentication successful!")
-                        
-                        # Clear the code from URL
                         st.query_params.clear()
                         return True
                     except Exception as e:
@@ -173,7 +165,6 @@ class HyperpureAutomation:
                         st.error(f"Authentication failed: {str(e)}")
                         return False
                 else:
-                    # Show authorization link
                     st.markdown("### Google Authentication Required")
                     st.markdown(f"[Click here to authorize with Google]({auth_url})")
                     self.log("Waiting for user to authorize application", "INFO")
@@ -183,7 +174,6 @@ class HyperpureAutomation:
                 self.log("Google credentials missing in Streamlit secrets", "ERROR")
                 st.error("Google credentials missing in Streamlit secrets")
                 return False
-                
         except Exception as e:
             self.log(f"Authentication failed: {str(e)}", "ERROR")
             st.error(f"Authentication failed: {str(e)}")
@@ -824,3 +814,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
