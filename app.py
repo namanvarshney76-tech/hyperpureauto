@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Combined Streamlit App for Hyperpure Gmail to Drive and PDF to Sheet Workflows
-Combines Gmail attachment downloader and LlamaParse PDF processor with real-time tracking
+Modified to save attachments in existing Gmail_Attachments/Hyperpure GRN/PDFs/ with message ID prefix
 """
 
 import streamlit as st
@@ -237,39 +237,50 @@ class HyperpureAutomation:
             self.log(f"Failed to get email details for {message_id}: {str(e)}", "ERROR")
             return {}
     
-    def create_drive_folder(self, folder_name: str, parent_folder_id: Optional[str] = None) -> str:
+    def find_target_folder(self, parent_folder_id: str) -> Optional[str]:
+        """Find the PDFs folder in Gmail_Attachments/Hyperpure GRN/PDFs/"""
         try:
-            query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-            if parent_folder_id:
-                query += f" and '{parent_folder_id}' in parents"
-            existing = self.drive_service.files().list(q=query, fields='files(id, name)').execute()
-            files = existing.get('files', [])
-            if files:
-                return files[0]['id']
-            folder_metadata = {
-                'name': folder_name,
-                'mimeType': 'application/vnd.google-apps.folder'
-            }
-            if parent_folder_id:
-                folder_metadata['parents'] = [parent_folder_id]
-            folder = self.drive_service.files().create(
-                body=folder_metadata,
-                fields='id'
-            ).execute()
-            return folder.get('id')
+            # Find Gmail_Attachments folder
+            query = f"name='Gmail_Attachments' and mimeType='application/vnd.google-apps.folder' and '{parent_folder_id}' in parents and trashed=false"
+            result = self.drive_service.files().list(q=query, fields='files(id)').execute()
+            files = result.get('files', [])
+            if not files:
+                self.log("Gmail_Attachments folder not found", "ERROR")
+                return None
+            gmail_folder_id = files[0]['id']
+            
+            # Find Hyperpure GRN folder
+            query = f"name='Hyperpure GRN' and mimeType='application/vnd.google-apps.folder' and '{gmail_folder_id}' in parents and trashed=false"
+            result = self.drive_service.files().list(q=query, fields='files(id)').execute()
+            files = result.get('files', [])
+            if not files:
+                self.log("Hyperpure GRN folder not found", "ERROR")
+                return None
+            hyperpure_folder_id = files[0]['id']
+            
+            # Find PDFs folder
+            query = f"name='PDFs' and mimeType='application/vnd.google-apps.folder' and '{hyperpure_folder_id}' in parents and trashed=false"
+            result = self.drive_service.files().list(q=query, fields='files(id)').execute()
+            files = result.get('files', [])
+            if not files:
+                self.log("PDFs folder not found", "ERROR")
+                return None
+            return files[0]['id']
         except Exception as e:
-            self.log(f"Failed to create folder {folder_name}: {str(e)}", "ERROR")
-            return ""
+            self.log(f"Failed to find target folder: {str(e)}", "ERROR")
+            return None
     
-    def upload_to_drive(self, file_data: bytes, filename: str, folder_id: str) -> bool:
+    def upload_to_drive(self, file_data: bytes, filename: str, folder_id: str, message_id: str) -> bool:
+        """Upload file to Google Drive with message ID prefix"""
         try:
-            query = f"name='{filename}' and '{folder_id}' in parents and trashed=false"
+            prefixed_filename = f"{message_id}_{filename}"
+            query = f"name='{prefixed_filename}' and '{folder_id}' in parents and trashed=false"
             existing = self.drive_service.files().list(q=query, fields='files(id, name)').execute()
             if existing.get('files', []):
-                self.log(f"File already exists, skipping: {filename}", "INFO")
+                self.log(f"File already exists, skipping: {prefixed_filename}", "INFO")
                 return True
             file_metadata = {
-                'name': filename,
+                'name': prefixed_filename,
                 'parents': [folder_id]
             }
             media = MediaIoBaseUpload(
@@ -282,13 +293,13 @@ class HyperpureAutomation:
                 media_body=media,
                 fields='id'
             ).execute()
-            self.log(f"Uploaded to Drive: {filename}", "SUCCESS")
+            self.log(f"Uploaded to Drive: {prefixed_filename}", "SUCCESS")
             return True
         except Exception as e:
-            self.log(f"Failed to upload {filename}: {str(e)}", "ERROR")
+            self.log(f"Failed to upload {prefixed_filename}: {str(e)}", "ERROR")
             return False
     
-    def process_attachment(self, message_id: str, part: Dict, base_folder_id: str) -> bool:
+    def process_attachment(self, message_id: str, part: Dict, folder_id: str) -> bool:
         try:
             filename = part.get("filename", "").lower()
             if filename != CONFIG['gmail']['attachment_filter'].lower():
@@ -300,19 +311,18 @@ class HyperpureAutomation:
                 userId='me', messageId=message_id, id=att_id
             ).execute()
             file_data = base64.urlsafe_b64decode(att["data"].encode("UTF-8"))
-            success = self.upload_to_drive(file_data, filename, base_folder_id)
-            return success
+            return self.upload_to_drive(file_data, filename, folder_id, message_id)
         except Exception as e:
-            self.log(f"Failed to process attachment: {str(e)}", "ERROR")
+            self.log(f"Failed to process attachment for message {message_id}: {str(e)}", "ERROR")
             return False
     
-    def extract_attachments_from_email(self, message_id: str, payload: Dict, base_folder_id: str) -> int:
+    def extract_attachments_from_email(self, message_id: str, payload: Dict, folder_id: str) -> int:
         count = 0
         if "parts" in payload:
             for part in payload["parts"]:
-                count += self.extract_attachments_from_email(message_id, part, base_folder_id)
+                count += self.extract_attachments_from_email(message_id, part, folder_id)
         if "filename" in payload and "attachmentId" in payload.get("body", {}):
-            if self.process_attachment(message_id, payload, base_folder_id):
+            if self.process_attachment(message_id, payload, folder_id):
                 count += 1
         return count
     
@@ -321,6 +331,13 @@ class HyperpureAutomation:
             if status_callback:
                 status_callback("Starting Gmail workflow...")
             self.log("Starting Gmail to Drive workflow", "INFO")
+            
+            # Find the target PDFs folder
+            target_folder_id = self.find_target_folder(config['gdrive_folder_id'])
+            if not target_folder_id:
+                self.log("Target folder structure not found", "ERROR")
+                return {'success': False, 'processed': 0}
+            
             emails = self.search_emails(
                 sender=config['sender'],
                 search_term=config['search_term'],
@@ -334,12 +351,7 @@ class HyperpureAutomation:
                 return {'success': True, 'processed': 0}
             if status_callback:
                 status_callback(f"Found {len(emails)} emails. Processing attachments...")
-            base_folder_id = self.create_drive_folder("Gmail_Attachments", config.get('gdrive_folder_id'))
-            if not base_folder_id:
-                self.log("Failed to create base folder in Google Drive", "ERROR")
-                return {'success': False, 'processed': 0}
-            if progress_callback:
-                progress_callback(50)
+            
             processed_count = 0
             for i, email in enumerate(emails):
                 if status_callback:
@@ -347,7 +359,7 @@ class HyperpureAutomation:
                 message = self.gmail_service.users().messages().get(
                     userId='me', id=email['id']
                 ).execute()
-                att_count = self.extract_attachments_from_email(email['id'], message['payload'], base_folder_id)
+                att_count = self.extract_attachments_from_email(email['id'], message['payload'], target_folder_id)
                 if att_count > 0:
                     processed_count += att_count
                 if progress_callback:
@@ -956,5 +968,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
