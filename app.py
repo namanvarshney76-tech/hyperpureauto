@@ -242,7 +242,7 @@ class HyperpureAutomation:
         try:
             # Find Gmail_Attachments folder
             query = f"name='Gmail_Attachments' and mimeType='application/vnd.google-apps.folder' and '{parent_folder_id}' in parents and trashed=false"
-            result = self.drive_service.files().list(q=query, fields='files(id)').execute()
+            result = self.drive_service.files().list(q=query, fields='files(id, name)').execute()
             files = result.get('files', [])
             if not files:
                 self.log("Gmail_Attachments folder not found", "ERROR")
@@ -251,7 +251,7 @@ class HyperpureAutomation:
             
             # Find Hyperpure GRN folder
             query = f"name='Hyperpure GRN' and mimeType='application/vnd.google-apps.folder' and '{gmail_folder_id}' in parents and trashed=false"
-            result = self.drive_service.files().list(q=query, fields='files(id)').execute()
+            result = self.drive_service.files().list(q=query, fields='files(id, name)').execute()
             files = result.get('files', [])
             if not files:
                 self.log("Hyperpure GRN folder not found", "ERROR")
@@ -260,7 +260,7 @@ class HyperpureAutomation:
             
             # Find PDFs folder
             query = f"name='PDFs' and mimeType='application/vnd.google-apps.folder' and '{hyperpure_folder_id}' in parents and trashed=false"
-            result = self.drive_service.files().list(q=query, fields='files(id)').execute()
+            result = self.drive_service.files().list(q=query, fields='files(id, name)').execute()
             files = result.get('files', [])
             if not files:
                 self.log("PDFs folder not found", "ERROR")
@@ -273,12 +273,17 @@ class HyperpureAutomation:
     def upload_to_drive(self, file_data: bytes, filename: str, folder_id: str, message_id: str) -> bool:
         """Upload file to Google Drive with message ID prefix"""
         try:
+            # Use the original filename but add message ID prefix
             prefixed_filename = f"{message_id}_{filename}"
+            
+            # Check if file already exists
             query = f"name='{prefixed_filename}' and '{folder_id}' in parents and trashed=false"
             existing = self.drive_service.files().list(q=query, fields='files(id, name)').execute()
             if existing.get('files', []):
                 self.log(f"File already exists, skipping: {prefixed_filename}", "INFO")
                 return True
+                
+            # Upload the file
             file_metadata = {
                 'name': prefixed_filename,
                 'parents': [folder_id]
@@ -968,3 +973,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
