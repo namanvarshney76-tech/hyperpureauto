@@ -42,7 +42,7 @@ st.set_page_config(
 CONFIG = {
     'gmail': {
         'sender': 'noreply@hyperpure.com',
-        'search_term': 'Hyperpure GRN',
+        'search_term': 'GRN against PO Number',
         'gdrive_folder_id': '1euqxO-meY4Ahszpdk3XbwlRwvkfSlY8k',
         'attachment_filter': 'attachment.pdf'
     },
@@ -973,5 +973,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
